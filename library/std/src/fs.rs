@@ -143,6 +143,7 @@ pub enum TryLockError {
 /// Opens a directory and then a file inside it.
 ///
 /// ```no_run
+/// #![feature(dirfd)]
 /// use std::fs::Dir;
 ///
 /// fn main() -> std::io::Result<()> {
@@ -1440,7 +1441,8 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::Dir;
+    /// #![feature(dirfd)]
+    /// use std::{fs::Dir, io::Read};
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let dir = Dir::new("foo")?;
@@ -1469,7 +1471,8 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::Dir;
+    /// #![feature(dirfd)]
+    /// use std::fs::{Dir, OpenOptions};
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let dir = Dir::new_with("foo", OpenOptions::new().write(true))?;
@@ -1482,7 +1485,7 @@ impl Dir {
         Ok(Self { inner: fs_imp::Dir::new_with(path, &opts.0)? })
     }
 
-    /// Attempts to open a file relative to this directory.
+    /// Attempts to open a file in read-only mode relative to this directory.
     ///
     /// # Errors
     ///
@@ -1494,7 +1497,8 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::Dir;
+    /// #![feature(dirfd)]
+    /// use std::{fs::Dir, io::Read};
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let dir = Dir::new("foo")?;
@@ -1521,7 +1525,8 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::Dir;
+    /// #![feature(dirfd)]
+    /// use std::{fs::{Dir, OpenOptions}, io::Read};
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let dir = Dir::new("foo")?;
@@ -1548,6 +1553,7 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
+    /// #![feature(dirfd)]
     /// use std::fs::Dir;
     ///
     /// fn main() -> std::io::Result<()> {
@@ -1574,6 +1580,7 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
+    /// #![feature(dirfd)]
     /// use std::fs::Dir;
     ///
     /// fn main() -> std::io::Result<()> {
@@ -1600,6 +1607,7 @@ impl Dir {
     /// # Examples
     ///
     /// ```no_run
+    /// #![feature(dirfd)]
     /// use std::fs::Dir;
     ///
     /// fn main() -> std::io::Result<()> {
