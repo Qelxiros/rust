@@ -4,6 +4,7 @@
 use std::{
     env, fmt,
     ops::AddAssign,
+    panic::{AssertUnwindSafe, catch_unwind},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -175,7 +176,7 @@ impl flags::AnalysisStats {
             UsizeWithUnderscore(dep_loc),
             UsizeWithUnderscore(dep_item_trees),
         );
-        eprintln!("  dependency item stats: {}", dep_item_stats);
+        eprintln!("  dependency item stats: {dep_item_stats}");
 
         // FIXME(salsa-transition): bring back stats for ParseQuery (file size)
         // and ParseMacroExpansionQuery (macro expansion "file") size whenever we implement
@@ -295,7 +296,7 @@ impl flags::AnalysisStats {
             UsizeWithUnderscore(workspace_loc),
             UsizeWithUnderscore(workspace_item_trees),
         );
-        eprintln!("    usages: {}", workspace_item_stats);
+        eprintln!("    usages: {workspace_item_stats}");
 
         eprintln!("  Dependencies:");
         eprintln!(
@@ -303,7 +304,7 @@ impl flags::AnalysisStats {
             UsizeWithUnderscore(dep_loc),
             UsizeWithUnderscore(dep_item_trees),
         );
-        eprintln!("    declarations: {}", dep_item_stats);
+        eprintln!("    declarations: {dep_item_stats}");
 
         let crate_def_map_time = crate_def_map_sw.elapsed();
         eprintln!("{:<20} {}", "Item Collection:", crate_def_map_time);
@@ -701,10 +702,9 @@ impl flags::AnalysisStats {
 
         if self.parallel {
             let mut inference_sw = self.stop_watch();
-            let snap = db.snapshot();
             bodies
                 .par_iter()
-                .map_with(snap, |snap, &body| {
+                .map_with(db.clone(), |snap, &body| {
                     snap.body(body.into());
                     snap.infer(body.into());
                 })
@@ -722,6 +722,7 @@ impl flags::AnalysisStats {
         let mut num_pats_unknown = 0;
         let mut num_pats_partially_unknown = 0;
         let mut num_pat_type_mismatches = 0;
+        let mut panics = 0;
         for &body_id in bodies {
             let name = body_id.name(db).unwrap_or_else(Name::missing);
             let module = body_id.module(db);
@@ -775,7 +776,20 @@ impl flags::AnalysisStats {
             }
             bar.set_message(msg);
             let body = db.body(body_id.into());
-            let inference_result = db.infer(body_id.into());
+            let inference_result = catch_unwind(AssertUnwindSafe(|| db.infer(body_id.into())));
+            let inference_result = match inference_result {
+                Ok(inference_result) => inference_result,
+                Err(p) => {
+                    if let Some(s) = p.downcast_ref::<&str>() {
+                        eprintln!("infer panicked for {}: {}", full_name(), s);
+                    } else if let Some(s) = p.downcast_ref::<String>() {
+                        eprintln!("infer panicked for {}: {}", full_name(), s);
+                    }
+                    panics += 1;
+                    bar.inc(1);
+                    continue;
+                }
+            };
             // This query is LRU'd, so actually calling it will skew the timing results.
             let sm = || db.body_with_source_map(body_id.into()).1;
 
@@ -1009,6 +1023,7 @@ impl flags::AnalysisStats {
             percentage(num_pats_partially_unknown, num_pats),
             num_pat_type_mismatches
         );
+        eprintln!("  panics: {}", panics);
         eprintln!("{:<20} {}", "Inference:", inference_time);
         report_metric("unknown type", num_exprs_unknown, "#");
         report_metric("type mismatches", num_expr_type_mismatches, "#");
@@ -1294,7 +1309,7 @@ impl fmt::Display for UsizeWithUnderscore {
         let num_str = self.0.to_string();
 
         if num_str.len() <= 3 {
-            return write!(f, "{}", num_str);
+            return write!(f, "{num_str}");
         }
 
         let mut result = String::new();
@@ -1307,7 +1322,7 @@ impl fmt::Display for UsizeWithUnderscore {
         }
 
         let result = result.chars().rev().collect::<String>();
-        write!(f, "{}", result)
+        write!(f, "{result}")
     }
 }
 

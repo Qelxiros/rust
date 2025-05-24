@@ -456,7 +456,7 @@ pub(crate) fn hover_for_definition(
     let notable_traits = def_ty.map(|ty| notable_traits(db, &ty)).unwrap_or_default();
     let subst_types = subst.map(|subst| subst.types(db));
 
-    let markup = render::definition(
+    let (markup, range_map) = render::definition(
         sema.db,
         def,
         famous_defs.as_ref(),
@@ -469,7 +469,7 @@ pub(crate) fn hover_for_definition(
         display_target,
     );
     HoverResult {
-        markup: render::process_markup(sema.db, def, &markup, config),
+        markup: render::process_markup(sema.db, def, &markup, range_map, config),
         actions: [
             show_fn_references_action(sema.db, def),
             show_implementations_action(sema.db, def),
@@ -634,9 +634,7 @@ fn walk_and_push_ty(
         } else if let Some(trait_) = t.as_associated_type_parent_trait(db) {
             push_new_def(trait_.into());
         } else if let Some(tp) = t.as_type_param(db) {
-            let sized_trait = db
-                .lang_item(t.krate(db).into(), LangItem::Sized)
-                .and_then(|lang_item| lang_item.as_trait());
+            let sized_trait = LangItem::Sized.resolve_trait(db, t.krate(db).into());
             tp.trait_bounds(db)
                 .into_iter()
                 .filter(|&it| Some(it.into()) != sized_trait)

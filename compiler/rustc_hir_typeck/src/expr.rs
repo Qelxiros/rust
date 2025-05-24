@@ -16,7 +16,6 @@ use rustc_errors::{
 };
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::DefId;
-use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{ExprKind, HirId, QPath};
 use rustc_hir_analysis::NoVariantNamed;
@@ -50,8 +49,8 @@ use crate::errors::{
     YieldExprOutsideOfCoroutine,
 };
 use crate::{
-    BreakableCtxt, CoroutineTypes, Diverges, FnCtxt, Needs, TupleArgumentsFlag, cast,
-    fatally_break_rust, report_unexpected_variant_res, type_error_struct,
+    BreakableCtxt, CoroutineTypes, Diverges, FnCtxt, GatherLocalsVisitor, Needs,
+    TupleArgumentsFlag, cast, fatally_break_rust, report_unexpected_variant_res, type_error_struct,
 };
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
@@ -533,14 +532,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ExprKind::Break(destination, ref expr_opt) => {
                 self.check_expr_break(destination, expr_opt.as_deref(), expr)
             }
-            ExprKind::Continue(destination) => {
-                if destination.target_id.is_ok() {
-                    tcx.types.never
-                } else {
-                    // There was an error; make type-check fail.
-                    Ty::new_misc_error(tcx)
-                }
-            }
+            ExprKind::Continue(destination) => self.check_expr_continue(destination, expr),
             ExprKind::Ret(ref expr_opt) => self.check_expr_return(expr_opt.as_deref(), expr),
             ExprKind::Become(call) => self.check_expr_become(call, expr),
             ExprKind::Let(let_expr) => self.check_expr_let(let_expr, expr.hir_id),
@@ -987,6 +979,31 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             // There was an error; make type-check fail.
             err
+        }
+    }
+
+    fn check_expr_continue(
+        &self,
+        destination: hir::Destination,
+        expr: &'tcx hir::Expr<'tcx>,
+    ) -> Ty<'tcx> {
+        if let Ok(target_id) = destination.target_id {
+            if let hir::Node::Expr(hir::Expr { kind: ExprKind::Loop(..), .. }) =
+                self.tcx.hir_node(target_id)
+            {
+                self.tcx.types.never
+            } else {
+                // Liveness linting assumes `continue`s all point to loops. We'll report an error
+                // in `check_mod_loops`, but make sure we don't run liveness (#113379, #121623).
+                let guar = self.dcx().span_delayed_bug(
+                    expr.span,
+                    "found `continue` not pointing to loop, but no error reported",
+                );
+                Ty::new_error(self.tcx, guar)
+            }
+        } else {
+            // There was an error; make type-check fail.
+            Ty::new_misc_error(self.tcx)
         }
     }
 
@@ -1518,11 +1535,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let_expr: &'tcx hir::LetExpr<'tcx>,
         hir_id: HirId,
     ) -> Ty<'tcx> {
+        GatherLocalsVisitor::gather_from_let_expr(self, let_expr, hir_id);
+
         // for let statements, this is done in check_stmt
         let init = let_expr.init;
         self.warn_if_unreachable(init.hir_id, init.span, "block in `let` expression");
+
         // otherwise check exactly as a let statement
         self.check_decl((let_expr, hir_id).into());
+
         // but return a bool, for this is a boolean expression
         if let ast::Recovered::Yes(error_guaranteed) = let_expr.recovered {
             self.set_tainted_by_errors(error_guaranteed);
@@ -1827,7 +1848,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Create a new function context.
         let def_id = block.def_id;
         let fcx = FnCtxt::new(self, self.param_env, def_id);
-        crate::GatherLocalsVisitor::new(&fcx).visit_body(body);
 
         let ty = fcx.check_expr_with_expectation(body.value, expected);
         fcx.require_type_is_sized(ty, body.value.span, ObligationCauseCode::SizedConstOrStatic);

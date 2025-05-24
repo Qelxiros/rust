@@ -22,10 +22,10 @@ use crate::{
     hir::generics::GenericParams,
     import_map::ImportMap,
     item_tree::{AttrOwner, ItemTree},
-    lang_item::{self, LangItem, LangItemTarget, LangItems},
+    lang_item::{self, LangItem},
     nameres::{
-        DefMap, LocalDefMap,
         assoc::{ImplItems, TraitItems},
+        crate_def_map,
         diagnostics::DefDiagnostics,
     },
     signatures::{
@@ -110,16 +110,6 @@ pub trait DefDatabase: InternDatabase + ExpandDatabase + SourceDatabase {
 
     #[salsa::invoke(ItemTree::block_item_tree_query)]
     fn block_item_tree(&self, block_id: BlockId) -> Arc<ItemTree>;
-
-    #[salsa::invoke(DefMap::crate_local_def_map_query)]
-    fn crate_local_def_map(&self, krate: Crate) -> (Arc<DefMap>, Arc<LocalDefMap>);
-
-    #[salsa::invoke(DefMap::crate_def_map_query)]
-    fn crate_def_map(&self, krate: Crate) -> Arc<DefMap>;
-
-    /// Computes the block-level `DefMap`.
-    #[salsa::invoke(DefMap::block_def_map_query)]
-    fn block_def_map(&self, block: BlockId) -> Arc<DefMap>;
 
     /// Turns a MacroId into a MacroDefId, describing the macro's definition post name resolution.
     #[salsa::invoke(macro_def)]
@@ -325,9 +315,6 @@ pub trait DefDatabase: InternDatabase + ExpandDatabase + SourceDatabase {
 
     // endregion:attrs
 
-    #[salsa::invoke(LangItems::lang_item_query)]
-    fn lang_item(&self, start_crate: Crate, item: LangItem) -> Option<LangItemTarget>;
-
     #[salsa::invoke(ImportMap::import_map_query)]
     fn import_map(&self, krate: Crate) -> Arc<ImportMap>;
 
@@ -349,9 +336,6 @@ pub trait DefDatabase: InternDatabase + ExpandDatabase + SourceDatabase {
 
     // endregion:visibilities
 
-    #[salsa::invoke(LangItems::crate_lang_items_query)]
-    fn crate_lang_items(&self, krate: Crate) -> Option<Arc<LangItems>>;
-
     #[salsa::invoke(crate::lang_item::notable_traits_in_deps)]
     fn notable_traits_in_deps(&self, krate: Crate) -> Arc<[Arc<[TraitId]>]>;
     #[salsa::invoke(crate::lang_item::crate_notable_traits)]
@@ -369,7 +353,7 @@ fn include_macro_invoc(
     db: &dyn DefDatabase,
     krate: Crate,
 ) -> Arc<[(MacroCallId, EditionedFileId)]> {
-    db.crate_def_map(krate)
+    crate_def_map(db, krate)
         .modules
         .values()
         .flat_map(|m| m.scope.iter_macro_invoc())

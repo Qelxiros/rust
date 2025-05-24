@@ -251,16 +251,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let tcx = self.tcx();
         let obligations = if has_nested {
             let trait_def = obligation.predicate.def_id();
-            let conditions = if tcx.is_lang_item(trait_def, LangItem::Sized) {
-                self.sized_conditions(obligation)
-            } else if tcx.is_lang_item(trait_def, LangItem::Copy) {
-                self.copy_clone_conditions(obligation)
-            } else if tcx.is_lang_item(trait_def, LangItem::Clone) {
-                self.copy_clone_conditions(obligation)
-            } else if tcx.is_lang_item(trait_def, LangItem::FusedIterator) {
-                self.fused_iterator_conditions(obligation)
-            } else {
-                bug!("unexpected builtin trait {:?}", trait_def)
+            let conditions = match tcx.as_lang_item(trait_def) {
+                Some(LangItem::Sized) => self.sized_conditions(obligation),
+                Some(LangItem::Copy | LangItem::Clone) => self.copy_clone_conditions(obligation),
+                Some(LangItem::FusedIterator) => self.fused_iterator_conditions(obligation),
+                other => bug!("unexpected builtin trait {trait_def:?} ({other:?})"),
             };
             let BuiltinImplConditions::Where(types) = conditions else {
                 bug!("obligation {:?} had matched a builtin impl but now doesn't", obligation);
@@ -406,7 +401,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let predicate = self.infcx.enter_forall_and_leak_universe(obligation.predicate);
 
         let mut assume = predicate.trait_ref.args.const_at(2);
-        // FIXME(mgca): We should shallowly normalize this.
         if self.tcx().features().generic_const_exprs() {
             assume = crate::traits::evaluate_const(self.infcx, assume, obligation.param_env)
         }

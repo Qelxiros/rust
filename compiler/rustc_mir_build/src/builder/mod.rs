@@ -66,8 +66,7 @@ pub fn build_mir<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> Body<'tcx> {
                 }
             };
 
-            // this must run before MIR dump, because
-            // "not all control paths return a value" is reported here.
+            // Checking liveness after building the THIR ensures there were no typeck errors.
             //
             // maybe move the check to a MIR pass?
             tcx.ensure_ok().check_liveness(def);
@@ -450,10 +449,6 @@ fn construct_fn<'tcx>(
 ) -> Body<'tcx> {
     let span = tcx.def_span(fn_def);
     let fn_id = tcx.local_def_id_to_hir_id(fn_def);
-
-    // The representation of thir for `-Zunpretty=thir-tree` relies on
-    // the entry expression being the last element of `thir.exprs`.
-    assert_eq!(expr.as_usize(), thir.exprs.len() - 1);
 
     // Figure out what primary body this item has.
     let body = tcx.hir_body_owned_by(fn_def);
@@ -998,7 +993,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             self.source_scope = source_scope;
         }
 
-        if self.tcx.intrinsic(self.def_id).is_some_and(|i| i.must_be_overridden) {
+        if self.tcx.intrinsic(self.def_id).is_some_and(|i| i.must_be_overridden)
+            || self.tcx.is_sdylib_interface_build()
+        {
             let source_info = self.source_info(rustc_span::DUMMY_SP);
             self.cfg.terminate(block, source_info, TerminatorKind::Unreachable);
             self.cfg.start_new_block().unit()

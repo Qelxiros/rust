@@ -222,13 +222,14 @@ mod handlers {
     mod toggle_async_sugar;
     mod toggle_ignore;
     mod toggle_macro_delimiter;
+    mod unmerge_imports;
     mod unmerge_match_arm;
-    mod unmerge_use;
     mod unnecessary_async;
     mod unqualify_method_call;
     mod unwrap_block;
     mod unwrap_return_type;
     mod unwrap_tuple;
+    mod unwrap_type_to_generic_arg;
     mod wrap_return_type;
     mod wrap_unwrap_cfg_attr;
 
@@ -363,12 +364,13 @@ mod handlers {
             toggle_ignore::toggle_ignore,
             toggle_macro_delimiter::toggle_macro_delimiter,
             unmerge_match_arm::unmerge_match_arm,
-            unmerge_use::unmerge_use,
+            unmerge_imports::unmerge_imports,
             unnecessary_async::unnecessary_async,
             unqualify_method_call::unqualify_method_call,
             unwrap_block::unwrap_block,
             unwrap_return_type::unwrap_return_type,
             unwrap_tuple::unwrap_tuple,
+            unwrap_type_to_generic_arg::unwrap_type_to_generic_arg,
             wrap_return_type::wrap_return_type,
             wrap_unwrap_cfg_attr::wrap_unwrap_cfg_attr,
 

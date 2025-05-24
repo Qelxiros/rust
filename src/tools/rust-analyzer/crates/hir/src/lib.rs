@@ -53,7 +53,6 @@ use hir_def::{
         generics::{LifetimeParamData, TypeOrConstParamData, TypeParamProvenance},
     },
     item_tree::{AttrOwner, FieldParent, ImportAlias, ItemTreeFieldId, ItemTreeNode},
-    lang_item::LangItemTarget,
     layout::{self, ReprOptions, TargetDataLayout},
     nameres::{self, diagnostics::DefDiagnostic},
     per_ns::PerNs,
@@ -98,7 +97,8 @@ pub use crate::{
     diagnostics::*,
     has_source::HasSource,
     semantics::{
-        PathResolution, Semantics, SemanticsImpl, SemanticsScope, TypeInfo, VisibleTraits,
+        PathResolution, PathResolutionPerNs, Semantics, SemanticsImpl, SemanticsScope, TypeInfo,
+        VisibleTraits,
     },
 };
 
@@ -120,7 +120,7 @@ pub use {
         find_path::PrefixKind,
         import_map,
         lang_item::LangItem,
-        nameres::{DefMap, ModuleSource},
+        nameres::{DefMap, ModuleSource, crate_def_map},
         per_ns::Namespace,
         type_ref::{Mutability, TypeRef},
         visibility::Visibility,
@@ -137,7 +137,6 @@ pub use {
             HirFileRange, InFile, InFileWrapper, InMacroFile, InRealFile, MacroFilePosition,
             MacroFileRange,
         },
-        hygiene::{SyntaxContextExt, marks_rev},
         inert_attr_macro::AttributeTemplate,
         mod_path::{ModPath, PathKind, tool_path},
         name::Name,
@@ -229,7 +228,7 @@ impl Crate {
     }
 
     pub fn modules(self, db: &dyn HirDatabase) -> Vec<Module> {
-        let def_map = db.crate_def_map(self.id);
+        let def_map = crate_def_map(db, self.id);
         def_map.modules().map(|(id, _)| def_map.module_id(id).into()).collect()
     }
 
@@ -530,7 +529,7 @@ impl Module {
     /// might be missing `krate`. This can happen if a module's file is not included
     /// in the module tree of any target in `Cargo.toml`.
     pub fn crate_root(self, db: &dyn HirDatabase) -> Module {
-        let def_map = db.crate_def_map(self.id.krate());
+        let def_map = crate_def_map(db, self.id.krate());
         Module { id: def_map.crate_root().into() }
     }
 
@@ -781,7 +780,7 @@ impl Module {
             let drop_maybe_dangle = (|| {
                 // FIXME: This can be simplified a lot by exposing hir-ty's utils.rs::Generics helper
                 let trait_ = trait_?;
-                let drop_trait = db.lang_item(self.krate().into(), LangItem::Drop)?.as_trait()?;
+                let drop_trait = LangItem::Drop.resolve_trait(db, self.krate().into())?;
                 if drop_trait != trait_.into() {
                     return None;
                 }
@@ -2388,14 +2387,11 @@ impl Function {
         }
 
         let Some(impl_traits) = self.ret_type(db).as_impl_traits(db) else { return false };
-        let Some(future_trait_id) =
-            db.lang_item(self.ty(db).env.krate, LangItem::Future).and_then(|t| t.as_trait())
+        let Some(future_trait_id) = LangItem::Future.resolve_trait(db, self.ty(db).env.krate)
         else {
             return false;
         };
-        let Some(sized_trait_id) =
-            db.lang_item(self.ty(db).env.krate, LangItem::Sized).and_then(|t| t.as_trait())
-        else {
+        let Some(sized_trait_id) = LangItem::Sized.resolve_trait(db, self.ty(db).env.krate) else {
             return false;
         };
 
@@ -2473,7 +2469,7 @@ impl Function {
         {
             return None;
         }
-        let def_map = db.crate_def_map(HasModule::krate(&self.id, db));
+        let def_map = crate_def_map(db, HasModule::krate(&self.id, db));
         def_map.fn_as_proc_macro(self.id).map(|id| Macro { id: id.into() })
     }
 
@@ -2861,9 +2857,7 @@ pub struct Trait {
 
 impl Trait {
     pub fn lang(db: &dyn HirDatabase, krate: Crate, name: &Name) -> Option<Trait> {
-        db.lang_item(krate.into(), LangItem::from_name(name)?)
-            .and_then(LangItemTarget::as_trait)
-            .map(Into::into)
+        LangItem::from_name(name)?.resolve_trait(db, krate.into()).map(Into::into)
     }
 
     pub fn module(self, db: &dyn HirDatabase) -> Module {
@@ -3692,24 +3686,16 @@ impl GenericDef {
         }
 
         let source_map = match def {
-            GenericDefId::AdtId(AdtId::EnumId(it)) => {
-                db.enum_signature_with_source_map(it).1.clone()
-            }
-            GenericDefId::AdtId(AdtId::StructId(it)) => {
-                db.struct_signature_with_source_map(it).1.clone()
-            }
-            GenericDefId::AdtId(AdtId::UnionId(it)) => {
-                db.union_signature_with_source_map(it).1.clone()
-            }
+            GenericDefId::AdtId(AdtId::EnumId(it)) => db.enum_signature_with_source_map(it).1,
+            GenericDefId::AdtId(AdtId::StructId(it)) => db.struct_signature_with_source_map(it).1,
+            GenericDefId::AdtId(AdtId::UnionId(it)) => db.union_signature_with_source_map(it).1,
             GenericDefId::ConstId(_) => return,
-            GenericDefId::FunctionId(it) => db.function_signature_with_source_map(it).1.clone(),
-            GenericDefId::ImplId(it) => db.impl_signature_with_source_map(it).1.clone(),
+            GenericDefId::FunctionId(it) => db.function_signature_with_source_map(it).1,
+            GenericDefId::ImplId(it) => db.impl_signature_with_source_map(it).1,
             GenericDefId::StaticId(_) => return,
-            GenericDefId::TraitAliasId(it) => {
-                db.trait_alias_signature_with_source_map(it).1.clone()
-            }
-            GenericDefId::TraitId(it) => db.trait_signature_with_source_map(it).1.clone(),
-            GenericDefId::TypeAliasId(it) => db.type_alias_signature_with_source_map(it).1.clone(),
+            GenericDefId::TraitAliasId(it) => db.trait_alias_signature_with_source_map(it).1,
+            GenericDefId::TraitId(it) => db.trait_signature_with_source_map(it).1,
+            GenericDefId::TypeAliasId(it) => db.type_alias_signature_with_source_map(it).1,
         };
 
         expr_store_diagnostics(db, acc, &source_map);
@@ -3809,7 +3795,7 @@ impl GenericSubstitution {
         container_params
             .chain(self_params)
             .filter_map(|(ty, name)| {
-                Some((name?.symbol().clone(), Type { ty: ty.clone(), env: self.env.clone() }))
+                Some((name?.symbol().clone(), Type { ty, env: self.env.clone() }))
             })
             .collect()
     }
@@ -4030,8 +4016,7 @@ impl BuiltinAttr {
         if let builtin @ Some(_) = Self::builtin(name) {
             return builtin;
         }
-        let idx = db
-            .crate_def_map(krate.id)
+        let idx = crate_def_map(db, krate.id)
             .registered_attrs()
             .iter()
             .position(|it| it.as_str() == name)? as u32;
@@ -4046,7 +4031,7 @@ impl BuiltinAttr {
     pub fn name(&self, db: &dyn HirDatabase) -> Name {
         match self.krate {
             Some(krate) => Name::new_symbol_root(
-                db.crate_def_map(krate).registered_attrs()[self.idx as usize].clone(),
+                crate_def_map(db, krate).registered_attrs()[self.idx as usize].clone(),
             ),
             None => Name::new_symbol_root(Symbol::intern(
                 hir_expand::inert_attr_macro::INERT_ATTRIBUTES[self.idx as usize].name,
@@ -4074,14 +4059,14 @@ impl ToolModule {
     pub(crate) fn by_name(db: &dyn HirDatabase, krate: Crate, name: &str) -> Option<Self> {
         let krate = krate.id;
         let idx =
-            db.crate_def_map(krate).registered_tools().iter().position(|it| it.as_str() == name)?
+            crate_def_map(db, krate).registered_tools().iter().position(|it| it.as_str() == name)?
                 as u32;
         Some(ToolModule { krate, idx })
     }
 
     pub fn name(&self, db: &dyn HirDatabase) -> Name {
         Name::new_symbol_root(
-            db.crate_def_map(self.krate).registered_tools()[self.idx as usize].clone(),
+            crate_def_map(db, self.krate).registered_tools()[self.idx as usize].clone(),
         )
     }
 
@@ -4503,7 +4488,7 @@ impl Impl {
             MacroCallKind::Derive { ast_id, derive_attr_index, derive_index, .. } => {
                 let module_id = self.id.lookup(db).container;
                 (
-                    db.crate_def_map(module_id.krate())[module_id.local_id]
+                    crate_def_map(db, module_id.krate())[module_id.local_id]
                         .scope
                         .derive_macro_invoc(ast_id, derive_attr_index)?,
                     derive_index,
@@ -4545,7 +4530,7 @@ pub struct TraitRef {
 impl TraitRef {
     pub(crate) fn new_with_resolver(
         db: &dyn HirDatabase,
-        resolver: &Resolver,
+        resolver: &Resolver<'_>,
         trait_ref: hir_ty::TraitRef,
     ) -> TraitRef {
         let env = resolver
@@ -4767,13 +4752,13 @@ pub struct Type {
 }
 
 impl Type {
-    pub(crate) fn new_with_resolver(db: &dyn HirDatabase, resolver: &Resolver, ty: Ty) -> Type {
+    pub(crate) fn new_with_resolver(db: &dyn HirDatabase, resolver: &Resolver<'_>, ty: Ty) -> Type {
         Type::new_with_resolver_inner(db, resolver, ty)
     }
 
     pub(crate) fn new_with_resolver_inner(
         db: &dyn HirDatabase,
-        resolver: &Resolver,
+        resolver: &Resolver<'_>,
         ty: Ty,
     ) -> Type {
         let environment = resolver
@@ -4989,18 +4974,14 @@ impl Type {
     /// `std::future::Future` and returns the `Output` associated type.
     /// This function is used in `.await` syntax completion.
     pub fn into_future_output(&self, db: &dyn HirDatabase) -> Option<Type> {
-        let trait_ = db
-            .lang_item(self.env.krate, LangItem::IntoFutureIntoFuture)
-            .and_then(|it| {
-                let into_future_fn = it.as_function()?;
+        let trait_ = LangItem::IntoFutureIntoFuture
+            .resolve_function(db, self.env.krate)
+            .and_then(|into_future_fn| {
                 let assoc_item = as_assoc_item(db, AssocItem::Function, into_future_fn)?;
                 let into_future_trait = assoc_item.container_or_implemented_trait(db)?;
                 Some(into_future_trait.id)
             })
-            .or_else(|| {
-                let future_trait = db.lang_item(self.env.krate, LangItem::Future)?;
-                future_trait.as_trait()
-            })?;
+            .or_else(|| LangItem::Future.resolve_trait(db, self.env.krate))?;
 
         let canonical_ty =
             Canonical { value: self.ty.clone(), binders: CanonicalVarKinds::empty(Interner) };
@@ -5015,14 +4996,13 @@ impl Type {
 
     /// This does **not** resolve `IntoFuture`, only `Future`.
     pub fn future_output(self, db: &dyn HirDatabase) -> Option<Type> {
-        let future_output =
-            db.lang_item(self.env.krate, LangItem::FutureOutput)?.as_type_alias()?;
+        let future_output = LangItem::FutureOutput.resolve_type_alias(db, self.env.krate)?;
         self.normalize_trait_assoc_type(db, &[], future_output.into())
     }
 
     /// This does **not** resolve `IntoIterator`, only `Iterator`.
     pub fn iterator_item(self, db: &dyn HirDatabase) -> Option<Type> {
-        let iterator_trait = db.lang_item(self.env.krate, LangItem::Iterator)?.as_trait()?;
+        let iterator_trait = LangItem::Iterator.resolve_trait(db, self.env.krate)?;
         let iterator_item = db
             .trait_items(iterator_trait)
             .associated_type_by_name(&Name::new_symbol_root(sym::Item))?;
@@ -5030,9 +5010,7 @@ impl Type {
     }
 
     pub fn impls_iterator(self, db: &dyn HirDatabase) -> bool {
-        let Some(iterator_trait) =
-            db.lang_item(self.env.krate, LangItem::Iterator).and_then(|it| it.as_trait())
-        else {
+        let Some(iterator_trait) = LangItem::Iterator.resolve_trait(db, self.env.krate) else {
             return false;
         };
         let canonical_ty =
@@ -5042,12 +5020,13 @@ impl Type {
 
     /// Resolves the projection `<Self as IntoIterator>::IntoIter` and returns the resulting type
     pub fn into_iterator_iter(self, db: &dyn HirDatabase) -> Option<Type> {
-        let trait_ = db.lang_item(self.env.krate, LangItem::IntoIterIntoIter).and_then(|it| {
-            let into_iter_fn = it.as_function()?;
-            let assoc_item = as_assoc_item(db, AssocItem::Function, into_iter_fn)?;
-            let into_iter_trait = assoc_item.container_or_implemented_trait(db)?;
-            Some(into_iter_trait.id)
-        })?;
+        let trait_ = LangItem::IntoIterIntoIter.resolve_function(db, self.env.krate).and_then(
+            |into_iter_fn| {
+                let assoc_item = as_assoc_item(db, AssocItem::Function, into_iter_fn)?;
+                let into_iter_trait = assoc_item.container_or_implemented_trait(db)?;
+                Some(into_iter_trait.id)
+            },
+        )?;
 
         let canonical_ty =
             Canonical { value: self.ty.clone(), binders: CanonicalVarKinds::empty(Interner) };
@@ -5133,10 +5112,8 @@ impl Type {
     }
 
     pub fn is_copy(&self, db: &dyn HirDatabase) -> bool {
-        let lang_item = db.lang_item(self.env.krate, LangItem::Copy);
-        let copy_trait = match lang_item {
-            Some(LangItemTarget::Trait(it)) => it,
-            _ => return false,
+        let Some(copy_trait) = LangItem::Copy.resolve_trait(db, self.env.krate) else {
+            return false;
         };
         self.impls_trait(db, copy_trait.into(), &[])
     }
@@ -6423,7 +6400,7 @@ pub fn resolve_absolute_path<'a, I: Iterator<Item = Symbol> + Clone + 'a>(
                 })
                 .filter_map(|&krate| {
                     let segments = segments.clone();
-                    let mut def_map = db.crate_def_map(krate);
+                    let mut def_map = crate_def_map(db, krate);
                     let mut module = &def_map[DefMap::ROOT];
                     let mut segments = segments.with_position().peekable();
                     while let Some((_, segment)) = segments.next_if(|&(position, _)| {

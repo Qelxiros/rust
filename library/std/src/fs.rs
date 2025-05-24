@@ -309,8 +309,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     fn inner(path: &Path) -> io::Result<Vec<u8>> {
         let mut file = File::open(path)?;
         let size = file.metadata().map(|m| m.len() as usize).ok();
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(size.unwrap_or(0))?;
+        let mut bytes = Vec::try_with_capacity(size.unwrap_or(0))?;
         io::default_read_to_end(&mut file, &mut bytes, size)?;
         Ok(bytes)
     }
@@ -3303,7 +3302,7 @@ pub fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<ReadDir> {
 /// When possible, permissions should be set at creation time instead.
 ///
 /// # Rationale
-/// POSIX does not specify an `lchown` function,
+/// POSIX does not specify an `lchmod` function,
 /// and symlinks can be followed regardless of what permission bits are set.
 ///
 /// # Errors
