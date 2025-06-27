@@ -1355,17 +1355,18 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         sess.dcx().emit_err(errors::InstrumentationNotSupported { us: "XRay".to_string() });
     }
 
-    if let Some(flavor) = sess.opts.cg.linker_flavor {
-        if let Some(compatible_list) = sess.target.linker_flavor.check_compatibility(flavor) {
-            let flavor = flavor.desc();
-            sess.dcx().emit_err(errors::IncompatibleLinkerFlavor { flavor, compatible_list });
-        }
+    if let Some(flavor) = sess.opts.cg.linker_flavor
+        && let Some(compatible_list) = sess.target.linker_flavor.check_compatibility(flavor)
+    {
+        let flavor = flavor.desc();
+        sess.dcx().emit_err(errors::IncompatibleLinkerFlavor { flavor, compatible_list });
     }
 
-    if sess.opts.unstable_opts.function_return != FunctionReturn::default() {
-        if sess.target.arch != "x86" && sess.target.arch != "x86_64" {
-            sess.dcx().emit_err(errors::FunctionReturnRequiresX86OrX8664);
-        }
+    if sess.opts.unstable_opts.function_return != FunctionReturn::default()
+        && sess.target.arch != "x86"
+        && sess.target.arch != "x86_64"
+    {
+        sess.dcx().emit_err(errors::FunctionReturnRequiresX86OrX8664);
     }
 
     if let Some(regparm) = sess.opts.unstable_opts.regparm {
@@ -1376,10 +1377,8 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
             sess.dcx().emit_err(errors::UnsupportedRegparmArch);
         }
     }
-    if sess.opts.unstable_opts.reg_struct_return {
-        if sess.target.arch != "x86" {
-            sess.dcx().emit_err(errors::UnsupportedRegStructReturnArch);
-        }
+    if sess.opts.unstable_opts.reg_struct_return && sess.target.arch != "x86" {
+        sess.dcx().emit_err(errors::UnsupportedRegStructReturnArch);
     }
 
     // The code model check applies to `thunk` and `thunk-extern`, but not `thunk-inline`, so it is
